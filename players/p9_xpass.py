@@ -242,7 +242,11 @@ def _gather(info, embed, source_id, tid, media_type, season, episode):
     # the player's live playlist is the authoritative, currently-signed source
     for item in (info.get("playlist") or []):
         f = item.get("file")
-        if not f or any(s["raw"] == f for s in sources):
+        # the jwplayer list also carries placeholder rows ("/video/error");
+        # only absolute media URLs are real sources
+        if not f or not str(f).startswith("http"):
+            continue
+        if any(s["raw"] == f for s in sources):
             continue
         sources.insert(0, {
             "raw": f, "playable": f, "type": "hls",
@@ -254,6 +258,11 @@ def _gather(info, embed, source_id, tid, media_type, season, episode):
 
 def _probe(url, referer, timeout=20):
     """Follow redirects and report whether the URL really serves HLS."""
+    # A row that is not an absolute URL is a placeholder, not a source. Report
+    # it as dead instead of letting urllib raise "unknown url type" and take
+    # the whole player down with it.
+    if not str(url).startswith(("http://", "https://")):
+        return 0, "", ""
     req = urllib.request.Request(url, headers={
         "User-Agent": UA, "Referer": referer, "Accept": "*/*"})
     try:
