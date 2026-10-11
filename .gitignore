@@ -1,0 +1,21 @@
+# bytecode
+__pycache__/
+*.py[cod]
+
+# local runtime output
+*.log
+server.log
+
+# scratch: reverse-engineering dumps, sniffer output, raw bundles
+probe/
+
+# local config / secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+credentials*
+
+# cloudflared quick-tunnel state
+*.json.old
