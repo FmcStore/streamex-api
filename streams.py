@@ -14,11 +14,13 @@ Chain (all GETs, signed and single use):
 
 Node runs the WebAssembly (no python wasm runtime is installed here).
 """
+import base64
 import json
 import os
 import re
 import shutil
 import subprocess
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -28,6 +30,15 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 HERE = os.path.dirname(os.path.abspath(__file__))
 DECODER = os.path.join(HERE, "decrypt", "vsdec.mjs")
 NODE = shutil.which("node") or "/usr/bin/node"
+
+# generate.php hands out one JWT per media host, but the token is bound to the
+# host's own audience, not to a single playlist: one token plays every stream on
+# that origin. The host also rate limits the endpoint (429), so callers that
+# minted once per URL lost every stream after the first. The JWT carries an exp
+# (4h) plus an ip_cidr claim, so the right move is cache it per origin and
+# reuse it until it is close to expiry.
+_TOKEN_TTL = 4 * 3600 - 300
+_token_cache = {}
 
 
 class StreamError(Exception):
@@ -87,16 +98,43 @@ def mint_token(stream_url):
     """Each media host needs a short lived, IP bound ?token= on its playlist.
 
     The player asks the host itself: GET <origin>/generate.php -> plain token.
-    Without it the host answers 401 'no token'.
+    Without it the host answers 401 'no token'. The endpoint is rate limited
+    (429) and the token it returns covers the whole origin for 4 hours, so the
+    answer is cached per origin and callers stop hammering it.
     """
     origin = origin_of(stream_url)
     if not origin:
         return None
-    status, body = _get(origin + "/generate.php", origin + "/")
+    hit = _token_cache.get(origin)
+    if hit and hit["exp"] > time.time():
+        return hit["token"]
+    for attempt in (1, 2):
+        try:
+            status, body = _get(origin + "/generate.php", origin + "/")
+            break
+        except StreamError as e:
+            # 429 is the host's rate limit talking, not a dead end: wait it out.
+            if "429" in str(e) and attempt == 1:
+                time.sleep(3)
+                continue
+            raise
     token = body.strip()
     if status != 200 or not token or token.startswith("<"):
         return None
+    exp = _jwt_exp(token) or (time.time() + _TOKEN_TTL)
+    _token_cache[origin] = {"token": token, "exp": min(exp, time.time() + _TOKEN_TTL)}
     return token
+
+
+def _jwt_exp(token):
+    """Read exp out of the JWT payload without verifying it (we just minted it)."""
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return float(json.loads(
+            base64.urlsafe_b64decode(payload).decode("utf8", "replace"))["exp"])
+    except Exception:
+        return None
 
 
 def playable_url(url, token=None):
@@ -175,12 +213,13 @@ def resolve(tmdb_id, media_type="movie", season=None, episode=None):
                           % (media_type, tid,
                              "" if media_type == "movie" else " S%sE%s" % (season, episode)))
 
-    # Each stream host needs its own token before the playlist will answer.
+    # Each media origin mints one token that plays all of its streams (and rate
+    # limits /generate.php), so mint_token caches per origin itself.
     resolved = []
     for u in urls:
         entry = {"raw": u, "token": None, "playable": u, "tokenError": None}
         try:
-            tok = mint_token(u)
+            tok = mint_token(u)          # cached per origin inside
             if tok:
                 entry["token"] = tok
                 entry["playable"] = playable_url(u, tok)

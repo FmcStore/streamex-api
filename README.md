@@ -157,12 +157,19 @@ Dua jebakan yang sudah ditangani:
 
 ### Kejujuran hasil
 
-Setiap URL yang muncul di `streams[]` sudah di-fetch lebih dulu: kalau tidak
-membalas `200` + `#EXTM3U`/`application/vnd.apple.mpegurl`, URL itu masuk
-`deadSources[]` dengan `reason`-nya, bukan diiklankan sebagai stream hidup.
+Player yang punya tahap probe (P5, P9) hanya mengiklankan URL yang sudah
+di-fetch dan membalas `200` + `#EXTM3U`/`application/vnd.apple.mpegurl`. Sisanya
+masuk `deadSources[]` beserta `reason`-nya, bukan diiklankan sebagai stream
+hidup.
 
-URL bertanda tangan dan berumur pendek: jangan disimpan lama, ambil ulang kalau
-pemutaran gagal.
+P1 tidak memprobe: URL-nya ditandatangani lalu langsung dikembalikan, karena
+tiap fetch menambah panggilan ke host yang sama. Kalau ada entri di `sources[]`
+dengan `tokenError`, artinya token untuk origin itu tidak didapat (mis. host
+membalas 429) dan URL-nya tidak akan jalan.
+
+Token P1 berlaku 4 jam dan terikat IP (`ip_cidr` di JWT-nya), jadi `streams[]`
+dari P1 hanya valid untuk pemanggil yang keluar dari IP yang sama dengan server
+ini. Jangan disimpan lama; ambil ulang kalau pemutaran gagal.
 
 ## Status player
 
