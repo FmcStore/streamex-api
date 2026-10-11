@@ -167,8 +167,9 @@ def slug(name):
 
 def media_links(item):
     """Build the site urls that a client can hand to a browser."""
-    mid = item.get("id")
-    mt = item.get("media_type") or ("tv" if item.get("name") and not item.get("title") else "movie")
+    mid = item.get("tmdbId") or item.get("id")
+    mt = item.get("mediaType") or item.get("media_type") or (
+        "tv" if item.get("name") and not item.get("title") else "movie")
     if mt == "person":
         return {"detail": "%s/person/%s/%s" % (SITE, mid, slug(item.get("name")))}
     name = item.get("title") or item.get("name") or ""
@@ -298,14 +299,21 @@ def discover_filters(media_type, q):
     """Mirror the filter dropdowns the site exposes on its listing pages."""
     lang = q.get("lang", "en")
     region = q.get("region")
+    country = q.get("country")
     year = q.get("year")
     genre = q.get("genre")
     min_rating = q.get("minRating")
     p = {}
     if lang and lang != "all":
         p["with_original_language"] = lang
+    # region is the TMDB watch-provider region (tied to whichever language is
+    # being browsed) and does not filter results on its own. Browsing by where a
+    # title was made needs with_origin_country, so a client asking for a country
+    # gets the filter it actually means.
     if region and lang and lang != "all":
         p["region"] = region
+    if country and str(country).upper() != "ALL":
+        p["with_origin_country"] = str(country).upper()
     date_gte = "primary_release_date.gte" if media_type == "movie" else "first_air_date.gte"
     date_lte = "primary_release_date.lte" if media_type == "movie" else "first_air_date.lte"
     if year:
@@ -314,7 +322,7 @@ def discover_filters(media_type, q):
         p[date_gte] = "%s-01-01" % year
         p[date_lte] = "%s-12-31" % year
     if genre:
-        p["with_genres"] = genre
+        p["with_genres"] = genre_id(media_type, genre)
     if min_rating:
         p["vote_average.gte"] = min_rating
     return p
@@ -357,6 +365,7 @@ ENDPOINTS = {
     "tv_watch": "GET /api/tv/{tmdbId}/watch?season=&episode=",
     "search": "GET /api/search?q=&page=&type=multi|movie|tv|person",
     "genres": "GET /api/genres?type=movie|tv",
+    "countries": "GET /api/countries",
     "people_trending": "GET /api/people/trending",
     "person_detail": "GET /api/person/{tmdbId}",
     "comments": "GET /api/comments/{movie|tv}/{tmdbId}?page=&limit=&season=&episode=",
@@ -635,6 +644,16 @@ def genres(media_type):
     r = tmdb("genre/%s/list" % media_type)
     return {"mediaType": media_type, "count": len(r["genres"]),
             "genres": r["genres"]}
+
+
+def countries():
+    """Country browse needs ISO 3166-1 codes, so serve the list TMDB accepts."""
+    rows = tmdb("configuration/countries")
+    items = sorted(({"code": c["iso_3166_1"],
+                     "name": c.get("english_name") or c.get("native_name"),
+                     "nativeName": c.get("native_name")} for c in rows),
+                   key=lambda c: c["name"] or "")
+    return {"count": len(items), "items": items}
 
 
 def people_trending():
@@ -952,6 +971,7 @@ ROUTES = [
     (r"^/api/tv/(\d+)/?$", lambda m, q: tv_detail(m.group(1))),
     (r"^/api/search/?$", lambda m, q: search(q)),
     (r"^/api/genres/?$", lambda m, q: genres(valid_media(q.get("type", "movie")))),
+    (r"^/api/countries/?$", lambda m, q: countries()),
     (r"^/api/people/trending/?$", lambda m, q: people_trending()),
     (r"^/api/people/(\d+)/?$", lambda m, q: person_detail(m.group(1))),
     (r"^/api/person/(\d+)/?$", lambda m, q: person_detail(m.group(1))),
@@ -979,6 +999,7 @@ ROUTE_TTL = {
     "/api/search": TTL_LIST,
     "/api/people/trending": TTL_DETAIL,
     "/api/genres": 86400,
+    "/api/countries": 86400,
     "/api/comments": 60,
     "/api/reactions": 60,
 }
